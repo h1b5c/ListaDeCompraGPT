@@ -28,23 +28,8 @@ if (dbUrl && dbAuthToken) {
   })
 }
 
-// Default mock data - used as fallback when DB is not configured
-const defaultItems: ShoppingItem[] = [
-  { id: 1, name: 'Avocados', detail: '2 ripe', categories: ['Produce'], checked: false },
-  { id: 2, name: 'Oat milk', detail: '1 carton', categories: ['Dairy', 'Pantry'], checked: false },
-  { id: 3, name: 'Sourdough bread', detail: '1 loaf', categories: ['Bakery'], checked: false },
-  { id: 4, name: 'Cherry tomatoes', detail: '500 g', categories: ['Produce'], checked: true },
-  { id: 5, name: 'Pasta', detail: '2 packs', categories: ['Pantry'], checked: true },
-]
-
-const familyItems: ShoppingItem[] = [
-  { id: 101, name: 'Bananas', detail: '6 pieces', categories: ['Produce'], checked: false },
-  { id: 102, name: 'Greek yogurt', detail: '2 tubs', categories: ['Dairy'], checked: false },
-  { id: 103, name: 'Bagels', detail: '1 pack', categories: ['Bakery', 'Pantry'], checked: true },
-  { id: 104, name: 'Breakfast cereal', detail: '1 box', categories: ['Pantry'], checked: false },
-]
-
-const defaultCategories: Category[] = ['Produce', 'Dairy', 'Bakery', 'Pantry']
+// No default mock data - app relies entirely on TURSO database
+// If DB is not configured, items and categories will be empty
 
 const useDatabaseItems = (group: Group, onItemsUpdate?: (items: ShoppingItem[]) => void) => {
   const [items, setItems] = useState<ShoppingItem[]>([])
@@ -53,8 +38,8 @@ const useDatabaseItems = (group: Group, onItemsUpdate?: (items: ShoppingItem[]) 
   useEffect(() => {
     if (!dbClient) {
       setLoaded(true)
-      // Notify parent about default items
-      onItemsUpdate?.(group === 'Personal' ? defaultItems : familyItems)
+      // Notify parent about empty state when no DB
+      onItemsUpdate?.([])
       return
     }
 
@@ -77,6 +62,9 @@ const useDatabaseItems = (group: Group, onItemsUpdate?: (items: ShoppingItem[]) 
         onItemsUpdate?.(fetchedItems)
       } catch (err) {
         console.error('Error fetching items from TURSO:', err)
+        // On error, keep empty state - no fallback to mock data
+        setItems([])
+        onItemsUpdate?.([])
       } finally {
         setLoaded(true)
       }
@@ -85,8 +73,7 @@ const useDatabaseItems = (group: Group, onItemsUpdate?: (items: ShoppingItem[]) 
     fetchItems()
   }, [dbClient, group, onItemsUpdate])
 
-  // If DB is not configured or query failed, use default data
-  return loaded ? items : group === 'Personal' ? defaultItems : familyItems
+  return items
 }
 
 const useDatabaseCategories = (onCategoriesUpdate?: (categories: Category[]) => void) => {
@@ -96,8 +83,8 @@ const useDatabaseCategories = (onCategoriesUpdate?: (categories: Category[]) => 
   useEffect(() => {
     if (!dbClient) {
       setLoaded(true)
-      // Notify parent about default categories
-      onCategoriesUpdate?.(defaultCategories)
+      // Notify parent about empty state when no DB
+      onCategoriesUpdate?.([])
       return
     }
 
@@ -114,6 +101,9 @@ const useDatabaseCategories = (onCategoriesUpdate?: (categories: Category[]) => 
         onCategoriesUpdate?.(fetchedCategories)
       } catch (err) {
         console.error('Error fetching categories from TURSO:', err)
+        // On error, keep empty state - no fallback to mock data
+        setCategories([])
+        onCategoriesUpdate?.([])
       } finally {
         setLoaded(true)
       }
@@ -122,8 +112,7 @@ const useDatabaseCategories = (onCategoriesUpdate?: (categories: Category[]) => 
     fetchCategories()
   }, [dbClient, onCategoriesUpdate])
 
-  // If DB is not configured, use default categories
-  return loaded ? categories : defaultCategories
+  return categories
 }
 
 function Icon({
@@ -162,7 +151,7 @@ function App() {
   const [filter, setFilter] = useState<Filter>('All')
   const [isAdding, setIsAdding] = useState(false)
   const [newItem, setNewItem] = useState('')
-  const [newCategories, setNewCategories] = useState<Category[]>(['Produce'])
+  const [newCategories, setNewCategories] = useState<Category[]>([])
   const [editingClass, setEditingClass] = useState<Category | null>(null)
   const [editedClassName, setEditedClassName] = useState('')
   const [editingItem, setEditingItem] = useState<ShoppingItem | null>(null)
@@ -173,8 +162,8 @@ function App() {
   const ignoreNextClick = useRef(false)
   const filterDrag = useRef({ startX: 0, scrollLeft: 0, dragging: false })
 
-  // Fetch items from database based on active group (with fallback to defaults)
-  // The onItemsUpdate callback syncs items into the 'lists' state
+  // Fetch items from database based on active group
+  // No fallback to mock data - uses only TURSO database data
   const personalItems = useDatabaseItems('Personal', (items) => {
     setLists((current) => ({ ...current, Personal: items }))
   })
@@ -185,8 +174,8 @@ function App() {
     setCategories(categories)
   })
 
-  // Use database categories once they load, fallback to defaults
-  const effectiveCategories = categories.length > 0 ? categories : dbCategories.length > 0 ? dbCategories : defaultCategories
+  // Use database categories only - no fallback to defaults
+  const effectiveCategories = categories.length > 0 ? categories : dbCategories.length > 0 ? dbCategories : []
 
   const items = lists[activeGroup]
 
@@ -216,7 +205,7 @@ function App() {
       ...current,
     ])
     setNewItem('')
-    setNewCategories([effectiveCategories[0]])
+    setNewCategories([])
     setIsAdding(false)
     setFilter('All')
   }
@@ -231,19 +220,9 @@ function App() {
     event.preventDefault()
     const className = newClassName.trim()
     if (!className) return
-    const existingClass = categories.find(
-      (category) => category.toLocaleLowerCase() === className.toLocaleLowerCase(),
-    )
-    if (existingClass) {
-      setFilter(existingClass)
-      setNewCategories((current) =>
-        current.includes(existingClass) ? current : [...current, existingClass],
-      )
-    } else {
-      setCategories((current) => [...current, className])
-      setFilter(className)
-      setNewCategories((current) => [...current, className])
-    }
+    setCategories((current) => [...current, className])
+    setFilter(className)
+    setNewCategories((current) => [...current, className])
     setNewClassName('')
     setIsClassWindowOpen(false)
   }
@@ -303,22 +282,21 @@ function App() {
   }
 
   const removeClass = () => {
-    if (!editingClass || categories.length === 1) return
-    const fallback = categories.find((category) => category !== editingClass) as Category
+    if (!editingClass || categories.length === 0) return
     setCategories((current) => current.filter((category) => category !== editingClass))
     setLists((current) => ({
       Personal: current.Personal.map((item) => {
         const next = item.categories.filter((category) => category !== editingClass)
-        return { ...item, categories: next.length ? next : [fallback] }
+        return { ...item, categories: next.length ? next : [] }
       }),
       Family: current.Family.map((item) => {
         const next = item.categories.filter((category) => category !== editingClass)
-        return { ...item, categories: next.length ? next : [fallback] }
+        return { ...item, categories: next.length ? next : [] }
       }),
     }))
     setNewCategories((current) => {
       const next = current.filter((category) => category !== editingClass)
-      return next.length ? next : [fallback]
+      return next.length ? next : []
     })
     if (filter === editingClass) setFilter('All')
     setEditingClass(null)
@@ -486,7 +464,7 @@ function App() {
               <div className="edit-window-actions">
                 <button
                   className="danger-button"
-                  disabled={categories.length === 1}
+                  disabled={categories.length === 0}
                   onClick={removeClass}
                   type="button"
                 >
