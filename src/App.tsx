@@ -1,4 +1,5 @@
-import { FormEvent, ReactNode, useMemo, useRef, useState } from 'react'
+import { FormEvent, ReactNode, useMemo, useRef, useState, useEffect } from 'react'
+import { createClient } from '@libsql/client'
 
 type Category = string
 type Filter = string
@@ -12,7 +13,23 @@ type ShoppingItem = {
   checked: boolean
 }
 
-const initialItems: ShoppingItem[] = [
+// Database client - configured via environment variables
+// Set VITE_DB_URL and VITE_DB_AUTH_TOKEN in your .env or Vercel dashboard
+const dbUrl = import.meta.env.VITE_DB_URL || ''
+const dbAuthToken = import.meta.env.VITE_DB_AUTH_TOKEN || ''
+
+// Create client only if env vars are provided
+let dbClient: any = null
+
+if (dbUrl && dbAuthToken) {
+  dbClient = createClient({
+    url: dbUrl,
+    authToken: dbAuthToken,
+  })
+}
+
+// Default mock data - used as fallback when DB is not configured
+const defaultItems: ShoppingItem[] = [
   { id: 1, name: 'Avocados', detail: '2 ripe', categories: ['Produce'], checked: false },
   { id: 2, name: 'Oat milk', detail: '1 carton', categories: ['Dairy', 'Pantry'], checked: false },
   { id: 3, name: 'Sourdough bread', detail: '1 loaf', categories: ['Bakery'], checked: false },
@@ -27,7 +44,87 @@ const familyItems: ShoppingItem[] = [
   { id: 104, name: 'Breakfast cereal', detail: '1 box', categories: ['Pantry'], checked: false },
 ]
 
-const initialCategories: Category[] = ['Produce', 'Dairy', 'Bakery', 'Pantry']
+const defaultCategories: Category[] = ['Produce', 'Dairy', 'Bakery', 'Pantry']
+
+const useDatabaseItems = (group: Group, onItemsUpdate?: (items: ShoppingItem[]) => void) => {
+  const [items, setItems] = useState<ShoppingItem[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!dbClient) {
+      setLoaded(true)
+      // Notify parent about default items
+      onItemsUpdate?.(group === 'Personal' ? defaultItems : familyItems)
+      return
+    }
+
+    const fetchItems = async () => {
+      try {
+        const res = await dbClient.execute(
+          `SELECT id, name, detail, categories, checked FROM items WHERE group = ?`,
+          [group]
+        )
+        const rows = res.rows as any[]
+        const fetchedItems = rows.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          detail: row.detail || '1 item',
+          categories: row.categories ? JSON.parse(row.categories) : [],
+          checked: row.checked === 1,
+        }))
+        setItems(fetchedItems)
+        // Notify parent about fetched items
+        onItemsUpdate?.(fetchedItems)
+      } catch (err) {
+        console.error('Error fetching items from TURSO:', err)
+      } finally {
+        setLoaded(true)
+      }
+    }
+
+    fetchItems()
+  }, [dbClient, group, onItemsUpdate])
+
+  // If DB is not configured or query failed, use default data
+  return loaded ? items : group === 'Personal' ? defaultItems : familyItems
+}
+
+const useDatabaseCategories = (onCategoriesUpdate?: (categories: Category[]) => void) => {
+  const [categories, setCategories] = useState<Category[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!dbClient) {
+      setLoaded(true)
+      // Notify parent about default categories
+      onCategoriesUpdate?.(defaultCategories)
+      return
+    }
+
+    const fetchCategories = async () => {
+      try {
+        // Try to fetch distinct categories from the database
+        const res = await dbClient.execute(
+          `SELECT DISTINCT category FROM item_categories WHERE is_active = 1`
+        )
+        const rows = res.rows as any[]
+        const fetchedCategories = rows.map((row: any) => row.category as Category)
+        setCategories(fetchedCategories)
+        // Notify parent about fetched categories
+        onCategoriesUpdate?.(fetchedCategories)
+      } catch (err) {
+        console.error('Error fetching categories from TURSO:', err)
+      } finally {
+        setLoaded(true)
+      }
+    }
+
+    fetchCategories()
+  }, [dbClient, onCategoriesUpdate])
+
+  // If DB is not configured, use default categories
+  return loaded ? categories : defaultCategories
+}
 
 function Icon({
   children,
@@ -54,12 +151,12 @@ function Icon({
 
 function App() {
   const [lists, setLists] = useState<Record<Group, ShoppingItem[]>>({
-    Personal: initialItems,
-    Family: familyItems,
+    Personal: [],
+    Family: [],
   })
   const [activeGroup, setActiveGroup] = useState<Group>('Personal')
   const [isMenuOpen, setIsMenuOpen] = useState(false)
-  const [categories, setCategories] = useState<Category[]>(initialCategories)
+  const [categories, setCategories] = useState<Category[]>([])
   const [isClassWindowOpen, setIsClassWindowOpen] = useState(false)
   const [newClassName, setNewClassName] = useState('')
   const [filter, setFilter] = useState<Filter>('All')
@@ -75,6 +172,22 @@ function App() {
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const ignoreNextClick = useRef(false)
   const filterDrag = useRef({ startX: 0, scrollLeft: 0, dragging: false })
+
+  // Fetch items from database based on active group (with fallback to defaults)
+  // The onItemsUpdate callback syncs items into the 'lists' state
+  const personalItems = useDatabaseItems('Personal', (items) => {
+    setLists((current) => ({ ...current, Personal: items }))
+  })
+  const familyItems = useDatabaseItems('Family', (items) => {
+    setLists((current) => ({ ...current, Family: items }))
+  })
+  const dbCategories = useDatabaseCategories((categories) => {
+    setCategories(categories)
+  })
+
+  // Use database categories once they load, fallback to defaults
+  const effectiveCategories = categories.length > 0 ? categories : dbCategories.length > 0 ? dbCategories : defaultCategories
+
   const items = lists[activeGroup]
 
   const setItems = (update: (current: ShoppingItem[]) => ShoppingItem[]) => {
@@ -103,7 +216,7 @@ function App() {
       ...current,
     ])
     setNewItem('')
-    setNewCategories([categories[0]])
+    setNewCategories([effectiveCategories[0]])
     setIsAdding(false)
     setFilter('All')
   }
@@ -111,7 +224,6 @@ function App() {
   const chooseGroup = (group: Group) => {
     setActiveGroup(group)
     setFilter('All')
-    setIsAdding(false)
     setIsMenuOpen(false)
   }
 
@@ -422,7 +534,7 @@ function App() {
               />
               <label>Product classes</label>
               <div className="category-select edit-category-select">
-                {categories.map((category) => (
+                {effectiveCategories.map((category) => (
                   <button
                     aria-pressed={editedItemCategories.includes(category)}
                     className={editedItemCategories.includes(category) ? 'selected' : ''}
@@ -548,7 +660,7 @@ function App() {
               filterDrag.current.dragging = false
             }}
           >
-            {(['All', ...categories] as Filter[]).map((category) => (
+            {(['All', ...effectiveCategories] as Filter[]).map((category) => (
               <button
                 className={filter === category ? 'active' : ''}
                 key={category}
@@ -669,40 +781,40 @@ function App() {
                     <path d="m5 12 4 4L19 6" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" />
                   </Icon>
                 </button>
+                <div className="category-select">
+                  {effectiveCategories.map((category) => (
+                    <button
+                      aria-pressed={newCategories.includes(category)}
+                      className={newCategories.includes(category) ? 'selected' : ''}
+                      key={category}
+                      onClick={() =>
+                        setNewCategories((current) =>
+                          current.includes(category)
+                            ? current.length === 1
+                              ? current
+                              : current.filter((entry) => entry !== category)
+                            : [...current, category],
+                        )
+                      }
+                      type="button"
+                    >
+                      {category}
+                    </button>
+                  ))}
+                </div>
+                <span className="selection-hint">
+                  Select one or more classes
+                </span>
               </div>
-              <div className="category-select">
-                {categories.map((category) => (
-                  <button
-                    aria-pressed={newCategories.includes(category)}
-                    className={newCategories.includes(category) ? 'selected' : ''}
-                    key={category}
-                    onClick={() =>
-                      setNewCategories((current) =>
-                        current.includes(category)
-                          ? current.length === 1
-                            ? current
-                            : current.filter((entry) => entry !== category)
-                          : [...current, category],
-                      )
-                    }
-                    type="button"
-                  >
-                    {category}
-                  </button>
-                ))}
-              </div>
-              <span className="selection-hint">
-                Select one or more classes
-              </span>
             </form>
-          )}
-          <button className="add-button" onClick={() => setIsAdding((open) => !open)}>
-            <Icon className={isAdding ? 'rotated' : ''} size={20}>
-              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-            </Icon>
-            {isAdding ? 'Close' : 'Add new item'}
-          </button>
-          <div className="home-indicator" />
+            )}
+            <button className="add-button" onClick={() => setIsAdding((open) => !open)}>
+              <Icon className={isAdding ? 'rotated' : ''} size={20}>
+                <path d="M12 5v14M5 12h14" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+              </Icon>
+              {isAdding ? 'Close' : 'Add new item'}
+            </button>
+            <div className="home-indicator" />
         </div>
       </section>
     </main>
