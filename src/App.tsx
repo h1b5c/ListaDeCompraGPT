@@ -220,9 +220,20 @@ function App() {
     event.preventDefault()
     const className = newClassName.trim()
     if (!className) return
-    setCategories((current) => [...current, className])
-    setFilter(className)
-    setNewCategories((current) => [...current, className])
+    // Add category if not duplicate (case-insensitive)
+    const categoryExists = categories.some(
+      (cat) => cat.toLocaleLowerCase() === className.toLocaleLowerCase(),
+    )
+    if (categoryExists) {
+      setFilter(className)
+      setNewCategories((current) =>
+        current.includes(className) ? current : [...current, className],
+      )
+    } else {
+      setCategories((current) => [...current, className])
+      setFilter(className)
+      setNewCategories((current) => [...current, className])
+    }
     setNewClassName('')
     setIsClassWindowOpen(false)
   }
