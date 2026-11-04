@@ -174,8 +174,10 @@ function App() {
     setCategories(categories)
   })
 
-  // Use database categories only - no fallback to defaults
-  const effectiveCategories = categories.length > 0 ? categories : dbCategories.length > 0 ? dbCategories : []
+  // Use database categories, fallback to defaults if DB not configured
+  const effectiveCategories = categories.length > 0 ? categories 
+    : dbCategories.length > 0 ? dbCategories 
+    : ['Produce', 'Dairy', 'Bakery', 'Pantry']
 
   const items = lists[activeGroup]
 
